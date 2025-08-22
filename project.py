@@ -1,6 +1,7 @@
 from typing import Dict, List, Tuple, Optional
 import math
 import io
+import heapq
 
 INF = 10 ** 15
 
@@ -36,7 +37,6 @@ class MinCostMaxFlow:
             prevedge = [-1] * n
             dist[s] = 0
 
-            import heapq
             pq = [(0, s)]
             while pq:
                 d, u = heapq.heappop(pq)
@@ -87,115 +87,87 @@ class MinCostMaxFlow:
 
         return flow, cost
 
-def _build_and_solve(tasks: List[Dict], nodes: List[Dict], exec_cost: Dict[str, Dict[str, float]], granularity: int = 100):
-    task_ids = [t["id"] for t in tasks]
-    node_ids = [n["id"] for n in nodes]
-
-    edge_slot_demand: Dict[Tuple[int, int], int] = {}
-    edge_slot_cost: Dict[Tuple[int, int], int] = {}
-    max_slot_per_task = [0] * len(tasks)
-
-    SCALE = 1000
-
-    for ti, t in enumerate(tasks):
-        cpu_i = t["cpu"]
-        ram_i = t["ram"]
-        local_max = 0
-        for nj, nd in enumerate(nodes):
-            nid = nd["id"]
-            cpu_cap = nd["cpu_capacity"]
-            ram_cap = nd["ram_capacity"]
-            c = exec_cost.get(t["id"], {}).get(nid, float("inf"))
-            if not math.isfinite(c):
-                continue
-            if cpu_i <= cpu_cap and ram_i <= ram_cap:
-                share = max(cpu_i / max(1, cpu_cap), ram_i / max(1, ram_cap))
-                sd = max(1, math.ceil(share * granularity))
-                edge_slot_demand[(ti, nj)] = sd
-                per_unit = int(round((c / sd) * SCALE))
-                edge_slot_cost[(ti, nj)] = per_unit
-                local_max = max(local_max, sd)
-        max_slot_per_task[ti] = local_max
+def allocate(input_data: Dict) -> str:
+    tasks = input_data["tasks"]
+    nodes = input_data["nodes"]
+    exec_cost = input_data["exec_cost"]
 
     S = 0
-    T0 = 1
-    N0 = T0 + len(tasks)
-    K = N0 + len(nodes)
+    num_tasks = len(tasks)
+    num_nodes = len(nodes)
+    T_start = 1
+    N_start = T_start + num_tasks
+    K = N_start + num_nodes
+    
     mcmf = MinCostMaxFlow(K + 1)
+    
+    task_map = {t['id']: i for i, t in enumerate(tasks)}
+    node_map = {n['id']: i for i, n in enumerate(nodes)}
 
-    for ti in range(len(tasks)):
-        cap = max_slot_per_task[ti]
-        if cap > 0:
-            mcmf.add_edge(S, T0 + ti, cap, 0)
+    for i in range(num_tasks):
+        mcmf.add_edge(S, T_start + i, 1, 0)
+    
+    for t in tasks:
+        task_id = t["id"]
+        t_idx = task_map[task_id]
+        task_cpu = t["cpu"]
+        task_ram = t["ram"]
 
-    for (ti, nj), sd in edge_slot_demand.items():
-        c_per = edge_slot_cost[(ti, nj)]
-        mcmf.add_edge(T0 + ti, N0 + nj, sd, c_per)
+        for n in nodes:
+            node_id = n["id"]
+            n_idx = node_map[node_id]
+            node_cpu_cap = n["cpu_capacity"]
+            node_ram_cap = n["ram_capacity"]
 
-    for nj in range(len(nodes)):
-        mcmf.add_edge(N0 + nj, K, granularity, 0)
+            if task_cpu <= node_cpu_cap and task_ram <= node_ram_cap:
+                cost_value = exec_cost.get(task_id, {}).get(node_id)
+                if cost_value is not None and math.isfinite(cost_value):
+                    mcmf.add_edge(T_start + t_idx, N_start + n_idx, 1, int(cost_value))
 
-    flow, cost_scaled = mcmf.min_cost_flow(S, K, None)
+    for i in range(num_nodes):
+        mcmf.add_edge(N_start + i, K, num_tasks, 0)
+
+    max_flow = num_tasks
+    flow, cost = mcmf.min_cost_flow(S, K, max_flow)
 
     assignments: Dict[str, str] = {}
-    total_cost = 0.0
-    for ti, tid in enumerate(task_ids):
-        task_v = T0 + ti
-        takens = []
-        for e in mcmf.g[task_v]:
-            if not (N0 <= e.to < N0 + len(nodes)):
-                continue
-            nj = e.to - N0
-            sent = mcmf.g[e.to][e.rev].cap
-            sd = edge_slot_demand.get((ti, nj), 0)
-            if sent > 0:
-                takens.append((nj, sent, sd))
-        if len(takens) == 1:
-            nj, sent, sd = takens[0]
-            if sent == sd and sd > 0:
-                nid = node_ids[nj]
-                assignments[tid] = nid
-                total_cost += float(exec_cost[tid][nid])
-
+    for t_idx, task in enumerate(tasks):
+        task_id = task["id"]
+        for edge in mcmf.g[T_start + t_idx]:
+            if N_start <= edge.to < N_start + num_nodes and edge.cap == 0:
+                node_id = nodes[edge.to - N_start]["id"]
+                assignments[task_id] = node_id
+    
     buf = io.StringIO()
-    buf.write("Task Assignments\n")
-    for tid in task_ids:
-        if tid in assignments:
-            buf.write(f"  {tid} -> {assignments[tid]}\n")
+    buf.write("### Phase 1 Output: Initial Task Allocation\n\n")
+    buf.write("Assignments:\n")
+    for task in tasks:
+        task_id = task["id"]
+        if task_id in assignments:
+            buf.write(f"  {task_id} -> {assignments[task_id]}\n")
         else:
-            buf.write(f"  {tid} -> UNASSIGNED\n")
-    buf.write(f"Total Cost: {total_cost:.6f}\n")
+            buf.write(f"  {task_id} -> UNASSIGNED (Due to resource limits or no path)\n")
 
-    return {
-        "text_report": buf.getvalue(),
-        "assignments": assignments,
-        "assigned_count": len(assignments),
-        "total_cost": total_cost,
-        "flow_units": flow,
+    buf.write(f"\nTotal Cost: {cost}\n")
+    buf.write(f"Total Flow: {flow}\n")
+    
+    return buf.getvalue()
+
+demo_data = {
+    "tasks": [
+        {"id": "T1", "cpu": 2, "ram": 4, "deadline": 2},
+        {"id": "T2", "cpu": 1, "ram": 2, "deadline": 3}
+    ],
+    "nodes": [
+        {"id": "N1", "cpu_capacity": 5, "ram_capacity": 6},
+        {"id": "N2", "cpu_capacity": 3, "ram_capacity": 3}
+    ],
+    "exec_cost": {
+        "T1": {"N1": 4, "N2": 6},
+        "T2": {"N1": 3, "N2": 2}
     }
-
-def solve(tasks: List[Dict], nodes: List[Dict], exec_cost: Dict[str, Dict[str, float]], granularity: int = 100) -> Dict:
-    return _build_and_solve(tasks, nodes, exec_cost, granularity)
-
-def allocate(input_data: Dict, granularity: int = 100) -> str:
-    res = _build_and_solve(input_data["tasks"], input_data["nodes"], input_data["exec_cost"], granularity)
-    return res["text_report"]
+}
 
 if __name__ == "__main__":
-    demo = {
-        "tasks": [
-            {"id": "T1", "cpu": 2, "ram": 4, "deadline": 2},
-            {"id": "T2", "cpu": 1, "ram": 2, "deadline": 3},
-            {"id": "T3", "cpu": 3, "ram": 3, "deadline": 1}
-        ],
-        "nodes": [
-            {"id": "N1", "cpu_capacity": 5, "ram_capacity": 6},
-            {"id": "N2", "cpu_capacity": 3, "ram_capacity": 3}
-        ],
-        "exec_cost": {
-            "T1": {"N1": 4, "N2": 6},
-            "T2": {"N1": 3, "N2": 2},
-            "T3": {"N1": 2.5, "N2": float("inf")}
-        }
-    }
-    print(allocate(demo, granularity=100))
+    print(allocate(demo_data))
+
