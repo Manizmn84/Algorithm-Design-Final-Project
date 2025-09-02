@@ -27,15 +27,18 @@ def solve_task_allocation():
     }
     
     # The rest of your original Phase 1 code...
+    # set the id for tasks and Nodes 
     task_ids = list(tasks.keys())
     node_ids = list(nodes.keys())
     source_idx = 0
     sink_idx = 1 + len(task_ids) + len(node_ids)
     task_indices = {task_id: i + 1 for i, task_id in enumerate(task_ids)}
     node_indices = {node_id: i + 1 + len(task_ids) for i, node_id in enumerate(node_ids)}
+    # connect the Source to the tasks with capacity 1 and cost 0 
     mcf = min_cost_flow.SimpleMinCostFlow()
     for task_id, task_idx in task_indices.items():
         mcf.add_arc_with_capacity_and_unit_cost(source_idx, task_idx, 1, 0)
+    # connect the tasks to the Nodes if the Node can support the Tasks
     for task_id, task_data in tasks.items():
         for node_id, node_data in nodes.items():
             if (task_data["cpu"] <= node_data["cpu_capacity"] and task_data["ram"] <= node_data["ram_capacity"]):
@@ -43,8 +46,20 @@ def solve_task_allocation():
                 task_idx = task_indices[task_id]
                 node_idx = node_indices[node_id]
                 mcf.add_arc_with_capacity_and_unit_cost(task_idx, node_idx, 1, cost)
-    node_capacity = len(tasks) 
+    # node_capacity = len(tasks) 
+    min_task_cpu = min(task["cpu"] for task in tasks.values() if task["cpu"] > 0)
+    min_task_ram = min(task["ram"] for task in tasks.values() if task["ram"] > 0)
+
     for node_id, node_idx in node_indices.items():
+        node_data = nodes[node_id]
+        
+        # Calculate capacity based on your dynamic heuristic
+        max_tasks_cpu = node_data["cpu_capacity"] // min_task_cpu if min_task_cpu > 0 else 0
+        max_tasks_ram = node_data["ram_capacity"] // min_task_ram if min_task_ram > 0 else 0
+        
+        # Use the most restrictive resource as the final capacity
+        node_capacity = min(max_tasks_cpu, max_tasks_ram)
+        
         mcf.add_arc_with_capacity_and_unit_cost(node_idx, sink_idx, node_capacity, 0)
     num_tasks = len(tasks)
     mcf.set_node_supply(source_idx, num_tasks)
