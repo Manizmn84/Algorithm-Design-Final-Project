@@ -170,10 +170,177 @@ def create_final_schedule_phase2(assignments, sorted_tasks, tasks_data, nodes_da
     print("✅ Final Scheduling Successful!")
     return schedule, True
 
+
+# This new function will be the entry point for Phase 3
+def run_phase3_dynamic_reallocation(initial_schedule, initial_data, events):
+    """
+    Handles a list of runtime events to update the schedule dynamically.
+    """
+    print("\n--- Running Phase 3: Dynamic Reallocation ---")
+    
+    # We start with the valid schedule from Phase 2
+    current_schedule = initial_schedule.copy()
+    
+    # We need a mutable copy of the original data to work with
+    tasks_data = initial_data["tasks"].copy()
+    nodes_data = initial_data["nodes"].copy()
+    
+    for event in events:
+        if event["type"] == "node_failure":
+            failed_node = event["node_id"]
+            failure_time = event["time"]
+            
+            print(f"\n🚨 EVENT: Node '{failed_node}' failed at time {failure_time}!")
+            
+            # --- Step 1: Identify "Homeless" Tasks ---
+            homeless_tasks_ids = []
+            for task_id, schedule_info in current_schedule.items():
+                if (schedule_info["node"] == failed_node and 
+                    schedule_info["start_time"] >= failure_time):
+                    homeless_tasks_ids.append(task_id)
+            
+            if not homeless_tasks_ids:
+                print("No running or future tasks were on the failed node. Schedule is unaffected.")
+                continue
+
+            print("Homeless tasks that need reallocation:", homeless_tasks_ids)
+
+            # Remove the failed node from our active nodes list
+            del nodes_data[failed_node]
+            if not nodes_data:
+                print("❌ CRITICAL FAILURE: No remaining nodes available.")
+                return None, {"failed_tasks": homeless_tasks_ids}
+
+            # --- Step 2: Re-Allocate (Mini Phase 1) ---
+            homeless_tasks_data = {tid: tasks_data[tid] for tid in homeless_tasks_ids}
+            new_assignments, _ = run_phase1_allocation(
+                homeless_tasks_data,
+                nodes_data,
+                initial_data["exec_costs"],
+                initial_data["node_capacity_per_time"]
+            )
+
+            if not new_assignments:
+                print("❌ Re-allocation failed. No new home found for homeless tasks.")
+                return None, {"failed_tasks": homeless_tasks_ids}
+            
+            print("✅ Re-allocation successful:", new_assignments)
+            
+            # --- Step 3: Re-Schedule (Mini Phase 2) ---
+            updated_schedule, result = attempt_to_reschedule(
+                current_schedule,
+                homeless_tasks_ids,
+                new_assignments,
+                initial_data
+            )
+            
+            if not result["is_valid"]:
+                print("❌ System recovery failed during re-scheduling.")
+                return None, result
+            else:
+                print("✅ System recovery successful! Schedule has been updated.")
+                current_schedule = updated_schedule
+
+        elif event["type"] == "new_task":
+            # Logic for handling a new task would go here
+            print(f"\nEVENT: New task '{event['task']['id']}' arrived. (Handler not implemented yet).")
+    
+    return current_schedule, {"is_valid": True, "failed_tasks": []}
+
+
+def attempt_to_reschedule(current_schedule, homeless_tasks_ids, new_assignments, initial_data):
+    """
+    Tries to fit the newly re-allocated tasks into the existing schedule.
+    """
+    # 1. Create a new schedule containing only the "healthy" tasks
+    healthy_schedule = {
+        task_id: schedule_info 
+        for task_id, schedule_info in current_schedule.items() 
+        if task_id not in homeless_tasks_ids
+    }
+    
+    remaining_nodes = {nid: data for nid, data in initial_data["nodes"].items() if nid in new_assignments.values()}
+
+    # 2. Rebuild the timelines based on the healthy tasks
+    max_time_val = max(initial_data["time_slots"]) if initial_data["time_slots"] else 0
+    node_timelines = {node_id: [0] * (max_time_val + 1) for node_id in remaining_nodes}
+
+    for task_id, schedule_info in healthy_schedule.items():
+        # Ensure the node for the healthy task still exists
+        if schedule_info["node"] in node_timelines:
+            node_id = schedule_info["node"]
+            start = schedule_info["start_time"]
+            duration = initial_data["tasks"][task_id]["duration"]
+            cpu_need = initial_data["tasks"][task_id]["cpu"]
+            for i in range(duration):
+                if start + i < len(node_timelines[node_id]):
+                    node_timelines[node_id][start + i] += cpu_need
+
+    # 3. Try to schedule the homeless tasks
+    # Inside attempt_to_reschedule...
+    # 3. Try to schedule the homeless tasks
+    
+    # --- THIS IS THE FIX ---
+    # Filter the dependencies to only include those *between* the homeless tasks.
+    homeless_dependencies = [
+        dep for dep in initial_data["dependencies"]
+        if dep["before"] in homeless_tasks_ids and dep["after"] in homeless_tasks_ids
+    ]
+    
+    homeless_topo_sort = topological_sort(
+        {tid: initial_data["tasks"][tid] for tid in homeless_tasks_ids},
+        homeless_dependencies # Use the new, filtered list
+    )
+    # --- END OF FIX ---
+    
+    updated_schedule = healthy_schedule.copy()
+    failed_to_reschedule = []
+
+    for task_id in homeless_topo_sort:
+        task_info = initial_data["tasks"][task_id]
+        assigned_node = new_assignments[task_id]
+        
+        start_time = find_earliest_slot(
+            node_timelines[assigned_node],
+            initial_data["node_capacity_per_time"][assigned_node],
+            task_info["duration"],
+            task_info["cpu"],
+            initial_data["time_slots"]
+        )
+        
+        finish_time = start_time + task_info["duration"] if start_time != -1 else -1
+
+        if start_time == -1 or finish_time > task_info["deadline"]:
+            failed_to_reschedule.append(task_id)
+            continue
+
+        updated_schedule[task_id] = {"node": assigned_node, "start_time": start_time, "finish_time": finish_time}
+        
+        for i in range(task_info["duration"]):
+            node_timelines[assigned_node][start_time + i] += task_info["cpu"]
+
+    if failed_to_reschedule:
+        return None, {"is_valid": False, "failed_tasks": failed_to_reschedule}
+
+    return updated_schedule, {"is_valid": True, "failed_tasks": []}
+
+# You would call this from your main block after getting a valid Phase 2 schedule
+# Example:
+# if is_valid:
+#     events = [
+#         {"type": "node_failure", "node_id": "N2", "time": 1}
+#     ]
+#     initial_data = { "tasks": tasks_with_time, "nodes": nodes, ... }
+#     final_schedule, result = run_phase3_dynamic_reallocation(final_schedule, initial_data, events)
+#     if final_schedule:
+#        # print the final result
+
+
 # -----------------------------------------------------------------------------
 # MAIN EXECUTION BLOCK
 # -----------------------------------------------------------------------------
-if __name__ == "__main__":
+
+# if __name__ == "__main__":
     # --- Using your failing input data ---
     # tasks_with_time = {
     #     "T1": {"cpu": 2, "ram": 4, "duration": 1, "deadline": 3},
@@ -200,56 +367,139 @@ if __name__ == "__main__":
     # }
 
 
-    tasks_with_time = {
-    "T1": {"cpu": 2, "ram": 4, "duration": 1, "deadline": 3},
-    "T2": {"cpu": 1, "ram": 2, "duration": 1, "deadline": 3},
-    "T3": {"cpu": 3, "ram": 3, "duration": 2, "deadline": 4},
-    }
-    nodes = {
-        "N1": {"cpu_capacity": 5, "ram_capacity": 6},
-        "N2": {"cpu_capacity": 6, "ram_capacity": 5},
-    }
-    exec_costs = {
-        "T1": {"N1": 4, "N2": 2},
-        "T2": {"N1": 4, "N2": 4},
-        "T3": {"N1": 9, "N2": 3}, # Increased N1 cost to ensure T3 goes to N2
-    }
-    dependencies = [
-        {"before": "T1", "after": "T3"},
-        {"before": "T2", "after": "T3"}
-    ]
-    time_slots = [0, 1, 2, 3]
+    # tasks_with_time = {
+    # "T1": {"cpu": 2, "ram": 4, "duration": 1, "deadline": 3},
+    # "T2": {"cpu": 1, "ram": 2, "duration": 1, "deadline": 3},
+    # "T3": {"cpu": 3, "ram": 3, "duration": 2, "deadline": 4},
+    # }
+    # nodes = {
+    #     "N1": {"cpu_capacity": 5, "ram_capacity": 6},
+    #     "N2": {"cpu_capacity": 6, "ram_capacity": 5},
+    # }
+    # exec_costs = {
+    #     "T1": {"N1": 4, "N2": 2},
+    #     "T2": {"N1": 4, "N2": 4},
+    #     "T3": {"N1": 9, "N2": 3}, # Increased N1 cost to ensure T3 goes to N2
+    # }
+    # dependencies = [
+    #     {"before": "T1", "after": "T3"},
+    #     {"before": "T2", "after": "T3"}
+    # ]
+    # time_slots = [0, 1, 2, 3]
 
-    # --- THE ONLY KEY CHANGE IS HERE ---
-    node_capacity_per_time = {
-       "N1": {"0": 2, "1": 2, "2": 2, "3": 2},
-       # N2 now has enough capacity for T3's entire duration
-       "N2": {"0": 3, "1": 3, "2": 3, "3": 3}
-    }
+    # # --- THE ONLY KEY CHANGE IS HERE ---
+    # node_capacity_per_time = {
+    #    "N1": {"0": 2, "1": 2, "2": 2, "3": 2},
+    #    # N2 now has enough capacity for T3's entire duration
+    #    "N2": {"0": 3, "1": 3, "2": 3, "3": 3}
+    # }
 
     # --- Run the full workflow ---
     # Note that we now pass `node_capacity_per_time` to Phase 1
-    assignments , total_cost = run_phase1_allocation(tasks_with_time, nodes, exec_costs, node_capacity_per_time)
+    # assignments , total_cost = run_phase1_allocation(tasks_with_time, nodes, exec_costs, node_capacity_per_time)
 
-    if assignments:
-        print("\nPhase 1 Assignments:", json.dumps(assignments, indent=2))
+    # if assignments:
+    #     print("\nPhase 1 Assignments:", json.dumps(assignments, indent=2))
         
-        sorted_order = topological_sort(tasks_with_time, dependencies)
+    #     sorted_order = topological_sort(tasks_with_time, dependencies)
+    #     if sorted_order:
+    #         final_schedule, is_valid = create_final_schedule_phase2(
+    #             assignments,
+    #             sorted_order,
+    #             tasks_with_time,
+    #             nodes,
+    #             node_capacity_per_time,
+    #             time_slots
+    #         )
+    #         if is_valid:
+    #             final_output = {
+    #                 "schedule": final_schedule,
+    #                 "total_assignment_cost": total_cost
+    #             }
+    #             print("\n--- FINAL VALID SCHEDULE ---")
+    #             print(json.dumps(final_output, indent=2))
+    #     else:
+    #         print("❌ Phase 2 failed: A cycle was detected in dependencies.")
+
+
+# -----------------------------------------------------------------------------
+# MAIN EXECUTION BLOCK - COPY AND PASTE THIS AT THE END OF YOUR FILE
+# -----------------------------------------------------------------------------
+if __name__ == "__main__":
+    # --- 1. Define the Initial State of the System ---
+    initial_data = {
+        "tasks": {
+            "T1": {"cpu": 2, "ram": 4, "duration": 1, "deadline": 3},
+            "T2": {"cpu": 1, "ram": 2, "duration": 1, "deadline": 3},
+            "T3": {"cpu": 3, "ram": 3, "duration": 2, "deadline": 4},
+        },
+        "nodes": {
+            "N1": {"cpu_capacity": 5, "ram_capacity": 6},
+            "N2": {"cpu_capacity": 6, "ram_capacity": 5},
+        },
+        "exec_costs": {
+            "T1": {"N1": 4, "N2": 2},
+            "T2": {"N1": 4, "N2": 4},
+            "T3": {"N1": 9, "N2": 3},
+        },
+        "dependencies": [
+            {"before": "T1", "after": "T3"},
+            {"before": "T2", "after": "T3"}
+        ],
+        "time_slots": [0, 1, 2, 3, 4],
+        "node_capacity_per_time": {
+           "N1": {"0": 5, "1": 5, "2": 5, "3": 5, "4": 5},
+           "N2": {"0": 3, "1": 3, "2": 3, "3": 3, "4": 3}
+        }
+    }
+
+    # --- 2. Run Phases 1 and 2 to get the initial, valid schedule ---
+    assignments, total_cost = run_phase1_allocation(
+        initial_data["tasks"], 
+        initial_data["nodes"], 
+        initial_data["exec_costs"], 
+        initial_data["node_capacity_per_time"]
+    )
+    
+    initial_schedule = None
+    if assignments:
+        print("\nInitial Assignments:", json.dumps(assignments, indent=2))
+        sorted_order = topological_sort(initial_data["tasks"], initial_data["dependencies"])
+        
+        # Inside the main block...
         if sorted_order:
-            final_schedule, is_valid = create_final_schedule_phase2(
+            initial_schedule, is_valid = create_final_schedule_phase2(
                 assignments,
                 sorted_order,
-                tasks_with_time,
-                nodes,
-                node_capacity_per_time,
-                time_slots
+                initial_data["tasks"],
+                initial_data["nodes"],
+                initial_data["node_capacity_per_time"],
+                initial_data["time_slots"]
             )
             if is_valid:
-                final_output = {
-                    "schedule": final_schedule,
-                    "total_assignment_cost": total_cost
-                }
-                print("\n--- FINAL VALID SCHEDULE ---")
-                print(json.dumps(final_output, indent=2))
-        else:
-            print("❌ Phase 2 failed: A cycle was detected in dependencies.")
+                print("\n--- Initial Valid Schedule Created ---")
+                print(json.dumps({"schedule": initial_schedule, "cost": total_cost}, indent=2))
+
+    # --- 3. If the initial schedule is valid, introduce a runtime event ---
+    if initial_schedule:
+        events = [
+            {"type": "node_failure", "node_id": "N2", "time": 1}
+        ]
+        
+        # --- 4. Run Phase 3 to handle the event ---
+        updated_schedule, result = run_phase3_dynamic_reallocation(
+            initial_schedule,
+            initial_data,
+            events
+        )
+
+        if updated_schedule:
+            print("\n--- FINAL UPDATED SCHEDULE AFTER EVENT ---")
+            # Note: The cost might change, but for simplicity, we'll show the original.
+            # A more advanced model would recalculate the cost.
+            final_output = {
+                "updated_schedule": updated_schedule,
+                "original_cost": total_cost,
+                "failed_tasks": result["failed_tasks"]
+            }
+            print(json.dumps(final_output, indent=2))
