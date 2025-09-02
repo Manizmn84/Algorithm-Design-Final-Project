@@ -175,35 +175,10 @@ def create_final_schedule_phase2(assignments, sorted_tasks, tasks_data, nodes_da
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     # --- Using your failing input data ---
-    tasks_with_time = {
-        "T1": {"cpu": 2, "ram": 4, "duration": 1, "deadline": 3},
-        "T2": {"cpu": 1, "ram": 2, "duration": 1, "deadline": 3},
-        "T3": {"cpu": 3, "ram": 3, "duration": 2, "deadline": 4},
-    }
-    nodes = {
-        "N1": {"cpu_capacity": 5, "ram_capacity": 6},
-        "N2": {"cpu_capacity": 6, "ram_capacity": 5},
-    }
-    exec_costs = {
-        "T1": {"N1": 4, "N2": 2},
-        "T2": {"N1": 4, "N2": 4},
-        "T3": {"N1": 2, "N2": 3},
-    }
-    dependencies = [
-        {"before": "T1", "after": "T3"},
-        {"before": "T2", "after": "T3"}
-    ]
-    time_slots = [0, 1, 2, 3]
-    node_capacity_per_time = {
-       "N1": {"0": 2, "1": 2, "2": 2, "3": 2},
-       "N2": {"0": 3, "1": 3, "2": 2, "3": 2}
-    }
-
-
     # tasks_with_time = {
-    # "T1": {"cpu": 2, "ram": 4, "duration": 1, "deadline": 3},
-    # "T2": {"cpu": 1, "ram": 2, "duration": 1, "deadline": 3},
-    # "T3": {"cpu": 3, "ram": 3, "duration": 2, "deadline": 4},
+    #     "T1": {"cpu": 2, "ram": 4, "duration": 1, "deadline": 3},
+    #     "T2": {"cpu": 1, "ram": 2, "duration": 1, "deadline": 3},
+    #     "T3": {"cpu": 3, "ram": 3, "duration": 2, "deadline": 4},
     # }
     # nodes = {
     #     "N1": {"cpu_capacity": 5, "ram_capacity": 6},
@@ -212,20 +187,45 @@ if __name__ == "__main__":
     # exec_costs = {
     #     "T1": {"N1": 4, "N2": 2},
     #     "T2": {"N1": 4, "N2": 4},
-    #     "T3": {"N1": 9, "N2": 3}, # Increased N1 cost to ensure T3 goes to N2
+    #     "T3": {"N1": 2, "N2": 3},
     # }
     # dependencies = [
     #     {"before": "T1", "after": "T3"},
     #     {"before": "T2", "after": "T3"}
     # ]
     # time_slots = [0, 1, 2, 3]
-
-    # # --- THE ONLY KEY CHANGE IS HERE ---
     # node_capacity_per_time = {
     #    "N1": {"0": 2, "1": 2, "2": 2, "3": 2},
-    #    # N2 now has enough capacity for T3's entire duration
-    #    "N2": {"0": 3, "1": 3, "2": 3, "3": 3}
+    #    "N2": {"0": 3, "1": 3, "2": 2, "3": 2}
     # }
+
+
+    tasks_with_time = {
+    "T1": {"cpu": 2, "ram": 4, "duration": 1, "deadline": 3},
+    "T2": {"cpu": 1, "ram": 2, "duration": 1, "deadline": 3},
+    "T3": {"cpu": 3, "ram": 3, "duration": 2, "deadline": 4},
+    }
+    nodes = {
+        "N1": {"cpu_capacity": 5, "ram_capacity": 6},
+        "N2": {"cpu_capacity": 6, "ram_capacity": 5},
+    }
+    exec_costs = {
+        "T1": {"N1": 4, "N2": 2},
+        "T2": {"N1": 4, "N2": 4},
+        "T3": {"N1": 9, "N2": 3}, # Increased N1 cost to ensure T3 goes to N2
+    }
+    dependencies = [
+        {"before": "T1", "after": "T3"},
+        {"before": "T2", "after": "T3"}
+    ]
+    time_slots = [0, 1, 2, 3]
+
+    # --- THE ONLY KEY CHANGE IS HERE ---
+    node_capacity_per_time = {
+       "N1": {"0": 2, "1": 2, "2": 2, "3": 2},
+       # N2 now has enough capacity for T3's entire duration
+       "N2": {"0": 3, "1": 3, "2": 3, "3": 3}
+    }
 
     # --- Run the full workflow ---
     # Note that we now pass `node_capacity_per_time` to Phase 1
