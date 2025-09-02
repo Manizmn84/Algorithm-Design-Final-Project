@@ -324,6 +324,85 @@ def attempt_to_reschedule(current_schedule, homeless_tasks_ids, new_assignments,
 
     return updated_schedule, {"is_valid": True, "failed_tasks": []}
 
+def run_phase4_local_scheduler(assigned_tasks, node_id, node_data, node_capacity_per_time, time_slots):
+    """
+    Schedules tasks assigned to a single node using a smarter,
+    Earliest Deadline First (EDF) greedy heuristic.
+    """
+    print(f"\n--- Running Phase 4: Local Scheduling on Node '{node_id}' ---")
+    
+    # Sort the assigned tasks by their deadline (Earliest Deadline First)
+    tasks_to_schedule_ids = sorted(
+        assigned_tasks.keys(),
+        key=lambda tid: assigned_tasks[tid]["deadline"]
+    )
+    
+    print(f"Scheduling tasks in EDF order: {tasks_to_schedule_ids}")
+
+    # Use the same advanced scheduling logic from Phase 2
+    max_time_val = max(time_slots) if time_slots else 0
+    node_timeline = [0] * (max_time_val + 1)
+    
+    local_schedule = {}
+    
+    for task_id in tasks_to_schedule_ids:
+        task_info = assigned_tasks[task_id]
+        
+        start_time = find_earliest_slot(
+            node_timeline,
+            node_capacity_per_time[node_id],
+            task_info["duration"],
+            task_info["cpu"],
+            time_slots
+        )
+        
+        finish_time = start_time + task_info["duration"] if start_time != -1 else -1
+
+        if start_time == -1 or finish_time > task_info["deadline"]:
+            print(f"❌ Local scheduling FAILED for task '{task_id}'.")
+            local_schedule[task_id] = {"status": "failed", "reason": "No valid slot found"}
+            continue
+
+        local_schedule[task_id] = {
+            "status": "success",
+            "start_time": start_time,
+            "finish_time": finish_time
+        }
+        
+        for i in range(task_info["duration"]):
+            node_timeline[start_time + i] += task_info["cpu"]
+            
+    print(f"✅ Local scheduling for Node '{node_id}' complete.")
+    return local_schedule
+
+# --- How you would integrate this into your main block ---
+#
+# if assignments:
+#     # ... after Phase 1 runs ...
+#     final_system_schedule = {}
+#
+#     # Group tasks by the node they were assigned to
+#     tasks_per_node = {node_id: {} for node_id in nodes}
+#     for task_id, node_id in assignments.items():
+#         tasks_per_node[node_id][task_id] = tasks_with_time[task_id]
+#
+#     # Run the local scheduler for each node
+#     for node_id, assigned_tasks in tasks_per_node.items():
+#         if not assigned_tasks:
+#             continue
+#         
+#         node_schedule = run_phase4_local_scheduler(
+#             assigned_tasks,
+#             node_id,
+#             nodes[node_id],
+#             node_capacity_per_time,
+#             time_slots
+#         )
+#         final_system_schedule[node_id] = node_schedule
+#
+#     print("\n--- FINAL SYSTEM SCHEDULE (Phase 4) ---")
+#     print(json.dumps(final_system_schedule, indent=2))
+
 # You would call this from your main block after getting a valid Phase 2 schedule
 # Example:
 # if is_valid:
@@ -425,35 +504,108 @@ def attempt_to_reschedule(current_schedule, homeless_tasks_ids, new_assignments,
 # -----------------------------------------------------------------------------
 # MAIN EXECUTION BLOCK - COPY AND PASTE THIS AT THE END OF YOUR FILE
 # -----------------------------------------------------------------------------
+# if __name__ == "__main__":
+#     # --- 1. Define the Initial State of the System ---
+#     initial_data = {
+#         "tasks": {
+#             "T1": {"cpu": 2, "ram": 4, "duration": 1, "deadline": 3},
+#             "T2": {"cpu": 1, "ram": 2, "duration": 1, "deadline": 3},
+#             "T3": {"cpu": 3, "ram": 3, "duration": 2, "deadline": 4},
+#         },
+#         "nodes": {
+#             "N1": {"cpu_capacity": 5, "ram_capacity": 6},
+#             "N2": {"cpu_capacity": 6, "ram_capacity": 5},
+#         },
+#         "exec_costs": {
+#             "T1": {"N1": 4, "N2": 2},
+#             "T2": {"N1": 4, "N2": 4},
+#             "T3": {"N1": 9, "N2": 3},
+#         },
+#         "dependencies": [
+#             {"before": "T1", "after": "T3"},
+#             {"before": "T2", "after": "T3"}
+#         ],
+#         "time_slots": [0, 1, 2, 3, 4],
+#         "node_capacity_per_time": {
+#            "N1": {"0": 5, "1": 5, "2": 5, "3": 5, "4": 5},
+#            "N2": {"0": 3, "1": 3, "2": 3, "3": 3, "4": 3}
+#         }
+#     }
+
+#     # --- 2. Run Phases 1 and 2 to get the initial, valid schedule ---
+#     assignments, total_cost = run_phase1_allocation(
+#         initial_data["tasks"], 
+#         initial_data["nodes"], 
+#         initial_data["exec_costs"], 
+#         initial_data["node_capacity_per_time"]
+#     )
+    
+#     initial_schedule = None
+#     if assignments:
+#         print("\nInitial Assignments:", json.dumps(assignments, indent=2))
+#         sorted_order = topological_sort(initial_data["tasks"], initial_data["dependencies"])
+        
+#         # Inside the main block...
+#         if sorted_order:
+#             initial_schedule, is_valid = create_final_schedule_phase2(
+#                 assignments,
+#                 sorted_order,
+#                 initial_data["tasks"],
+#                 initial_data["nodes"],
+#                 initial_data["node_capacity_per_time"],
+#                 initial_data["time_slots"]
+#             )
+#             if is_valid:
+#                 print("\n--- Initial Valid Schedule Created ---")
+#                 print(json.dumps({"schedule": initial_schedule, "cost": total_cost}, indent=2))
+
+#     # --- 3. If the initial schedule is valid, introduce a runtime event ---
+#     if initial_schedule:
+#         events = [
+#             {"type": "node_failure", "node_id": "N2", "time": 1}
+#         ]
+        
+#         # --- 4. Run Phase 3 to handle the event ---
+#         updated_schedule, result = run_phase3_dynamic_reallocation(
+#             initial_schedule,
+#             initial_data,
+#             events
+#         )
+
+#         if updated_schedule:
+#             print("\n--- FINAL UPDATED SCHEDULE AFTER EVENT ---")
+#             # Note: The cost might change, but for simplicity, we'll show the original.
+#             # A more advanced model would recalculate the cost.
+#             final_output = {
+#                 "updated_schedule": updated_schedule,
+#                 "original_cost": total_cost,
+#                 "failed_tasks": result["failed_tasks"]
+#             }
+#             print(json.dumps(final_output, indent=2))
+
 if __name__ == "__main__":
     # --- 1. Define the Initial State of the System ---
     initial_data = {
         "tasks": {
-            "T1": {"cpu": 2, "ram": 4, "duration": 1, "deadline": 3},
-            "T2": {"cpu": 1, "ram": 2, "duration": 1, "deadline": 3},
-            "T3": {"cpu": 3, "ram": 3, "duration": 2, "deadline": 4},
+            "T1": {"cpu": 2, "ram": 4, "duration": 2, "deadline": 4, "priority": 1},
+            "T2": {"cpu": 3, "ram": 2, "duration": 3, "deadline": 5, "priority": 2},
+            "T3": {"cpu": 2, "ram": 3, "duration": 2, "deadline": 3, "priority": 3}, # Most urgent deadline
         },
         "nodes": {
-            "N1": {"cpu_capacity": 5, "ram_capacity": 6},
-            "N2": {"cpu_capacity": 6, "ram_capacity": 5},
+            "N1": {"cpu_capacity": 7, "ram_capacity": 10},
         },
         "exec_costs": {
-            "T1": {"N1": 4, "N2": 2},
-            "T2": {"N1": 4, "N2": 4},
-            "T3": {"N1": 9, "N2": 3},
+            "T1": {"N1": 2},
+            "T2": {"N1": 5},
+            "T3": {"N1": 3},
         },
-        "dependencies": [
-            {"before": "T1", "after": "T3"},
-            {"before": "T2", "after": "T3"}
-        ],
-        "time_slots": [0, 1, 2, 3, 4],
+        "time_slots": [0, 1, 2, 3, 4, 5],
         "node_capacity_per_time": {
-           "N1": {"0": 5, "1": 5, "2": 5, "3": 5, "4": 5},
-           "N2": {"0": 3, "1": 3, "2": 3, "3": 3, "4": 3}
+           "N1": {"0": 5, "1": 5, "2": 5, "3": 5, "4": 5, "5": 5},
         }
     }
 
-    # --- 2. Run Phases 1 and 2 to get the initial, valid schedule ---
+    # --- 2. Run Phase 1 to get the global assignments ---
     assignments, total_cost = run_phase1_allocation(
         initial_data["tasks"], 
         initial_data["nodes"], 
@@ -461,45 +613,28 @@ if __name__ == "__main__":
         initial_data["node_capacity_per_time"]
     )
     
-    initial_schedule = None
     if assignments:
-        print("\nInitial Assignments:", json.dumps(assignments, indent=2))
-        sorted_order = topological_sort(initial_data["tasks"], initial_data["dependencies"])
+        print("\nPhase 1 Assignments:", json.dumps(assignments, indent=2))
         
-        # Inside the main block...
-        if sorted_order:
-            initial_schedule, is_valid = create_final_schedule_phase2(
-                assignments,
-                sorted_order,
-                initial_data["tasks"],
-                initial_data["nodes"],
-                initial_data["node_capacity_per_time"],
-                initial_data["time_slots"]
+        # --- 3. Group tasks by their assigned node ---
+        tasks_per_node = {node_id: {} for node_id in initial_data["nodes"]}
+        for task_id, node_id in assignments.items():
+            tasks_per_node[node_id][task_id] = initial_data["tasks"][task_id]
+
+        # --- 4. Run the Phase 4 local scheduler for each node ---
+        final_system_schedule = {}
+        for node_id, assigned_tasks in tasks_per_node.items():
+            if not assigned_tasks:
+                continue
+            
+            node_schedule = run_phase4_local_scheduler(
+            assigned_tasks,
+            node_id,
+            initial_data["nodes"][node_id], # <-- This was the missing argument
+            initial_data["node_capacity_per_time"],
+            initial_data["time_slots"]
             )
-            if is_valid:
-                print("\n--- Initial Valid Schedule Created ---")
-                print(json.dumps({"schedule": initial_schedule, "cost": total_cost}, indent=2))
+            final_system_schedule[node_id] = node_schedule
 
-    # --- 3. If the initial schedule is valid, introduce a runtime event ---
-    if initial_schedule:
-        events = [
-            {"type": "node_failure", "node_id": "N2", "time": 1}
-        ]
-        
-        # --- 4. Run Phase 3 to handle the event ---
-        updated_schedule, result = run_phase3_dynamic_reallocation(
-            initial_schedule,
-            initial_data,
-            events
-        )
-
-        if updated_schedule:
-            print("\n--- FINAL UPDATED SCHEDULE AFTER EVENT ---")
-            # Note: The cost might change, but for simplicity, we'll show the original.
-            # A more advanced model would recalculate the cost.
-            final_output = {
-                "updated_schedule": updated_schedule,
-                "original_cost": total_cost,
-                "failed_tasks": result["failed_tasks"]
-            }
-            print(json.dumps(final_output, indent=2))
+        print("\n--- FINAL SYSTEM SCHEDULE (from Phase 4 Local Schedulers) ---")
+        print(json.dumps(final_system_schedule, indent=2))
